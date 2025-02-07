@@ -8,84 +8,115 @@ import re
 from urllib.parse import urljoin, urlparse
 from time import sleep
 
+# User-Agent to mimic real browser requests
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 # Function to extract emails from text
 def extract_emails_from_text(text):
-    return re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text)
+    return set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text))
 
 # Function to extract the main domain from a URL
 def get_main_domain(url):
     parsed_url = urlparse(url)
     domain_parts = parsed_url.netloc.split('.')
-    # Consider the last two parts of the domain (e.g., example.com)
-    main_domain = '.'.join(domain_parts[-2:])
-    return main_domain
+    return '.'.join(domain_parts[-2:])  # Example: example.com
 
-# Function to find all links on the root page
+# Function to find valid links on the root page, excluding images and external domains
 def find_links_on_root_page(url):
     try:
-        response = requests.get(url, timeout=10)  # Set timeout for request
+        response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
+        
+        # Ensure response is HTML
+        if 'text/html' not in response.headers.get('Content-Type', ''):
+            print(f"Skipping non-HTML content: {url}")
+            return []
+
         soup = BeautifulSoup(response.text, 'html.parser')
-        # Extract all anchor tags with href attribute
-        links = [urljoin(url, a['href']) for a in soup.find_all('a', href=True)]
-        # Get the main domain of the root URL
         main_domain = get_main_domain(url)
-        # Filter links to include only those within the same main domain (including subdomains)
-        filtered_links = [link for link in links if get_main_domain(link) == main_domain]
+
+        # Extract and filter links
+        links = [
+            urljoin(url, a['href'])
+            for a in soup.find_all('a', href=True)
+        ]
+        filtered_links = [
+            link for link in links
+            if get_main_domain(link) == main_domain and not re.search(r'\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|pdf|mp4|mp3)$', link, re.IGNORECASE)
+        ]
         return filtered_links
+
     except requests.RequestException as e:
-        print(f"Failed to retrieve or parse {url}: {e}")
+        print(f"Error fetching {url}: {e}")
         return []
 
-# Function to scrape emails from root page and its direct links
+# Function to scrape emails from a given page
+def scrape_emails_from_url(url):
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+
+        # Ensure response is HTML
+        if 'text/html' not in response.headers.get('Content-Type', ''):
+            print(f"Skipping non-HTML content: {url}")
+            return set()
+
+        return extract_emails_from_text(response.text)
+
+    except requests.RequestException as e:
+        print(f"Error fetching {url}: {e}")
+        return set()
+
+# Function to scrape emails from root page and its internal links
 def scrape_emails_from_root_and_links(root_url):
     emails_found = set()
     visited_links = set()
     emails_with_links = {}
 
-    # Scrape the root page
+    print(f"Scraping root: {root_url}")
     visited_links.add(root_url)
-    print(f"Scraping: {root_url}")
-    try:
-        root_response = requests.get(root_url, timeout=10)
-        root_response.raise_for_status()
-        emails = extract_emails_from_text(root_response.text)
-        emails_found.update(emails)
-        if emails:
-            emails_with_links[root_url] = set(emails)  # Store as set to ensure uniqueness
-    except requests.RequestException as e:
-        print(f"Failed to retrieve or parse {root_url}: {e}")
 
-    # Find and scrape all links on the root page
+    # Scrape root page
+    emails = scrape_emails_from_url(root_url)
+    emails_found.update(emails)
+    if emails:
+        emails_with_links[root_url] = emails
+
+    # Scrape internal links
     links = find_links_on_root_page(root_url)
     for link in links:
         if link not in visited_links:
+            print(f"Scraping link: {link}")
             visited_links.add(link)
-            print(f"Scraping: {link}")
-            try:
-                link_response = requests.get(link, timeout=10)
-                link_response.raise_for_status()
-                emails = extract_emails_from_text(link_response.text)
-                emails_found.update(emails)
-                if emails:
-                    emails_with_links[link] = set(emails)  # Store as set to ensure uniqueness
-            except requests.RequestException as e:
-                print(f"Failed to retrieve or parse {link}: {e}")
-            sleep(1)  # Sleep to avoid hitting the server too hard
+
+            emails = scrape_emails_from_url(link)
+            emails_found.update(emails)
+            if emails:
+                emails_with_links[link] = emails
+
+            sleep(1)  # Avoid overloading the server
 
     return visited_links, emails_with_links, emails_found
 
 # Function to update Google Sheet
 def update_google_sheet(sheet, row, visited_links, emails_with_links, emails_found):
-    # Update the Links Scraped column with each link on a new line
-    sheet.update_cell(row, 2, '\n'.join(visited_links))
-    
-    # Update the Email With Links column with each link and its emails on a new line
-    emails_with_links_str = '\n'.join([f'{link} - {", ".join(emails)}' for link, emails in emails_with_links.items()])
-    sheet.update_cell(row, 3, emails_with_links_str)
-    
-    # Update the Emails column with unique emails
-    sheet.update_cell(row, 4, ', '.join(emails_found))
+    try:
+        # Update the "Links Scraped" column
+        sheet.update_cell(row, 2, '\n'.join(visited_links))
+
+        # Update the "Emails With Links" column
+        emails_with_links_str = '\n'.join(
+            [f'{link} - {", ".join(emails)}' for link, emails in emails_with_links.items()]
+        )
+        sheet.update_cell(row, 3, emails_with_links_str)
+
+        # Update the "Emails" column
+        sheet.update_cell(row, 4, ', '.join(emails_found))
+
+    except Exception as e:
+        print(f"Error updating Google Sheet: {e}")
 
 # Main function to run the script
 def main():
@@ -96,22 +127,23 @@ def main():
     key_data = os.getenv("EMAIL_SCRAPER_KEY")
     if not key_data:
         raise Exception("EMAIL_SCRAPER_KEY environment variable not found!")
+
     creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(key_data), scope)
-    
     client = gspread.authorize(creds)
 
     # Open the Google Sheet
-    sheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1-0l-mE_qoAaanLZzAwmvt9xvTj5P_DPCqnGPfjKH3w0/edit?usp=sharing').sheet1
+    sheet_url = "https://docs.google.com/spreadsheets/d/1-0l-mE_qoAaanLZzAwmvt9xvTj5P_DPCqnGPfjKH3w0/edit?usp=sharing"
+    sheet = client.open_by_url(sheet_url).sheet1
 
-    # Get the number of rows with data in column A
-    rows_with_data = len(sheet.col_values(1))  # Get all rows with data in column A
+    # Get number of rows with data in column A
+    rows_with_data = len(sheet.col_values(1))
 
-    # Iterate over each row in Column A, starting from row 2 (assuming row 1 is a header)
+    # Process each domain from the Google Sheet
     for row in range(2, rows_with_data + 1):
         domain = sheet.cell(row, 1).value
         if domain:
             print(f"Processing {domain}...")
-            root_url = f"http://{domain}" if not domain.startswith('http') else domain
+            root_url = f"http://{domain}" if not domain.startswith("http") else domain
             visited_links, emails_with_links, emails_found = scrape_emails_from_root_and_links(root_url)
             update_google_sheet(sheet, row, visited_links, emails_with_links, emails_found)
 
