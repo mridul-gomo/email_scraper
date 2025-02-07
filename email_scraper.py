@@ -8,28 +8,36 @@ import re
 from urllib.parse import urljoin, urlparse
 from time import sleep
 
-# User-Agent to mimic real browser requests
+# User-Agent to mimic a real browser request
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-# Function to extract emails from text
+# Function to extract valid emails while filtering out image filenames & invalid matches
 def extract_emails_from_text(text):
-    return set(re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', text))
+    emails = re.findall(r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b', text)
+
+    # Exclude filenames, media files, and invalid email-like patterns
+    filtered_emails = {
+        email for email in emails
+        if not re.search(r'@\d+x|\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|pdf|mp4|mp3|avi|mov)$', email, re.IGNORECASE)
+        and not email.startswith(('http', 'www'))  # Avoid extracting from URLs
+    }
+
+    return filtered_emails
 
 # Function to extract the main domain from a URL
 def get_main_domain(url):
     parsed_url = urlparse(url)
     domain_parts = parsed_url.netloc.split('.')
-    return '.'.join(domain_parts[-2:])  # Example: example.com
+    return '.'.join(domain_parts[-2:])  # Extracts example.com from sub.example.com
 
-# Function to find valid links on the root page, excluding images and external domains
+# Function to find valid internal links on the root page (excluding images, external sites)
 def find_links_on_root_page(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
         
-        # Ensure response is HTML
         if 'text/html' not in response.headers.get('Content-Type', ''):
             print(f"Skipping non-HTML content: {url}")
             return []
@@ -37,33 +45,47 @@ def find_links_on_root_page(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         main_domain = get_main_domain(url)
 
-        # Extract and filter links
+        # Extract and filter links (only same domain, no images/media files)
         links = [
             urljoin(url, a['href'])
             for a in soup.find_all('a', href=True)
         ]
-        filtered_links = [
+        filtered_links = {
             link for link in links
-            if get_main_domain(link) == main_domain and not re.search(r'\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|pdf|mp4|mp3)$', link, re.IGNORECASE)
-        ]
+            if get_main_domain(link) == main_domain 
+            and not re.search(r'\.(png|jpg|jpeg|gif|svg|webp|bmp|ico|pdf|mp4|mp3|avi|mov)$', link, re.IGNORECASE)
+        }
         return filtered_links
 
     except requests.RequestException as e:
         print(f"Error fetching {url}: {e}")
-        return []
+        return set()
 
-# Function to scrape emails from a given page
+# Function to scrape emails from a given URL (text content + 'mailto:' links)
 def scrape_emails_from_url(url):
     try:
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
 
-        # Ensure response is HTML
         if 'text/html' not in response.headers.get('Content-Type', ''):
             print(f"Skipping non-HTML content: {url}")
             return set()
 
-        return extract_emails_from_text(response.text)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Extract emails from page text
+        emails_from_text = extract_emails_from_text(response.text)
+
+        # Extract emails from 'mailto:' links
+        mailto_links = {
+            a['href'].replace("mailto:", "").strip()
+            for a in soup.find_all('a', href=True)
+            if a['href'].startswith("mailto:")
+        }
+        emails_from_links = extract_emails_from_text(" ".join(mailto_links))
+
+        # Combine both sources of emails
+        return emails_from_text.union(emails_from_links)
 
     except requests.RequestException as e:
         print(f"Error fetching {url}: {e}")
@@ -100,19 +122,19 @@ def scrape_emails_from_root_and_links(root_url):
 
     return visited_links, emails_with_links, emails_found
 
-# Function to update Google Sheet
+# Function to update Google Sheet with extracted emails
 def update_google_sheet(sheet, row, visited_links, emails_with_links, emails_found):
     try:
-        # Update the "Links Scraped" column
+        # Update "Links Scraped" column
         sheet.update_cell(row, 2, '\n'.join(visited_links))
 
-        # Update the "Emails With Links" column
+        # Update "Emails With Links" column
         emails_with_links_str = '\n'.join(
             [f'{link} - {", ".join(emails)}' for link, emails in emails_with_links.items()]
         )
         sheet.update_cell(row, 3, emails_with_links_str)
 
-        # Update the "Emails" column
+        # Update "Emails" column
         sheet.update_cell(row, 4, ', '.join(emails_found))
 
     except Exception as e:
