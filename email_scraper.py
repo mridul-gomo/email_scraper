@@ -1,3 +1,5 @@
+import os
+import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import requests
@@ -14,7 +16,7 @@ def extract_emails_from_text(text):
 def get_main_domain(url):
     parsed_url = urlparse(url)
     domain_parts = parsed_url.netloc.split('.')
-    # Consider the last two parts of the domain (e.g., spelo.se)
+    # Consider the last two parts of the domain (e.g., example.com)
     main_domain = '.'.join(domain_parts[-2:])
     return main_domain
 
@@ -89,7 +91,13 @@ def update_google_sheet(sheet, row, visited_links, emails_with_links, emails_fou
 def main():
     # Google Sheets API setup
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name('C:/Users/user/Downloads/email_scraper_key.json', scope)
+
+    # Load service account credentials from environment variable
+    key_data = os.getenv("EMAIL_SCRAPER_KEY")
+    if not key_data:
+        raise Exception("EMAIL_SCRAPER_KEY environment variable not found!")
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(key_data), scope)
+    
     client = gspread.authorize(creds)
 
     # Open the Google Sheet
