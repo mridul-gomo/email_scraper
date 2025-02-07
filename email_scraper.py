@@ -103,12 +103,11 @@ def main():
     # Open the Google Sheet
     sheet = client.open_by_url('https://docs.google.com/spreadsheets/d/1-0l-mE_qoAaanLZzAwmvt9xvTj5P_DPCqnGPfjKH3w0/edit?usp=sharing').sheet1
 
-    # Ask for start and end row numbers
-    start_row = int(input("Enter the start row number: "))
-    end_row = int(input("Enter the end row number: "))
+    # Get the number of rows with data in column A
+    rows_with_data = len(sheet.col_values(1))  # Get all rows with data in column A
 
-    # Iterate over the specified rows of the sheet
-    for row in range(start_row, end_row + 1):
+    # Iterate over each row in Column A, starting from row 2 (assuming row 1 is a header)
+    for row in range(2, rows_with_data + 1):
         domain = sheet.cell(row, 1).value
         if domain:
             print(f"Processing {domain}...")
