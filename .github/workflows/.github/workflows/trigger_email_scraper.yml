@@ -1,0 +1,29 @@
+name: Trigger Email Scraper via Workflow Dispatch
+
+on:
+  workflow_dispatch:  # Allows manual or API-based triggers
+
+jobs:
+  run-email-scraper:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Step 4: Run the Python script
+      - name: Run email scraper
+        env:
+          EMAIL_SCRAPER_KEY: ${{ secrets.EMAIL_SCRAPER_KEY }}
+        run: python email_scraper.py
